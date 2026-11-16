@@ -384,7 +384,7 @@ def plant_dashboard(row: pd.Series, selected: int, strategy: str, scale: str) ->
       .top {{ display:flex; flex-wrap:wrap; justify-content:space-between; gap:10px; align-items:center; margin-bottom:10px; }}
       h2 {{ margin:0; font-size:20px; color:#0d3047; }} .sub {{ margin-top:4px; font-size:12px; color:#607e8e; }}
       .badge {{ border:1px solid #bad9dc; padding:7px 10px; border-radius:8px; color:#076d7d; font-size:12px; font-weight:700; background:#effafa; }}
-      svg {{ width:100%; min-width:760px; height:auto; display:block; }}
+      svg {{ width:100%; min-width:0; height:auto; display:block; }}
       .grid {{ fill:url(#grid); }} .pipe {{ fill:none; stroke:#86aeb9; stroke-width:7; stroke-linecap:round; }} .pipe-flow {{ fill:none; stroke:#149bb0; stroke-width:2.5; stroke-dasharray:9 7; stroke-linecap:round; }}
       .flow-label {{ font-size:13px; font-weight:700; fill:#127a91; }} .equip-label {{ font-size:10px; fill:#4d7281; letter-spacing:1px; }}
       .tank-body {{ fill:#e6f1f3; stroke:#8eaeba; stroke-width:2; }} .tank-roof {{ fill:#f1f7f8; stroke:#8eaeba; stroke-width:2; }} .water {{ fill:url(#water); opacity:.93; }}
@@ -630,13 +630,13 @@ def main() -> None:
         )
         display_df = ff if strategy == "PI + feedforward" else feedback
         row = display_df.iloc[instant]
-        bank, monitor = st.columns([1.7, 0.8], gap="large")
-        with bank:
-            st.markdown("<div class='section-kicker'>Banco conectado · variables calculadas</div>", unsafe_allow_html=True)
-            st.subheader("Banco de flotación en serie")
-            selected_cell = st.radio("Celda para monitorear", [1, 2, 3], horizontal=True, format_func=lambda x: f"C-{x:02d}")
-            plant_dashboard(row, selected_cell, strategy, scale)
-            st.caption("Nivel azul: PV filtrado. Línea amarilla: consigna. Cada bomba descarga la celda anterior y alimenta la siguiente.")
+        st.markdown("<div class='section-kicker'>Banco conectado · variables calculadas</div>", unsafe_allow_html=True)
+        st.subheader("Banco de flotación en serie")
+        selected_cell = st.radio("Celda para monitorear", [1, 2, 3], horizontal=True, format_func=lambda x: f"C-{x:02d}")
+        plant_dashboard(row, selected_cell, strategy, scale)
+        st.caption("Nivel azul: PV filtrado. Línea amarilla: consigna. Cada bomba descarga la celda anterior y alimenta la siguiente.")
+
+        monitor, interpretation = st.columns([0.9, 1.3], gap="large")
         with monitor:
             i = selected_cell
             error = row[f"SP{i}_cm"] - row[f"PV{i}_cm"]
@@ -651,6 +651,22 @@ def main() -> None:
                 <div class="signal"><span>AO · P-{i}</span><b>{row[f'AO_P{i}_bits']:.0f} bits</b></div>
                 <div class="signal"><span>Q colas</span><b>{row[f'Qout{i}_lpm']:.2f} lpm</b></div></div>""",
                 unsafe_allow_html=True,
+            )
+        with interpretation:
+            st.markdown("<div class='section-kicker'>Cómo interpretar esta lectura</div>", unsafe_allow_html=True)
+            st.subheader("Relación entre medición y control")
+            st.write(
+                "El transmisor **LT** entrega el nivel medido (PV). El controlador **LIC** lo compara con la "
+                "consigna (SP) y manda una orden analógica a la bomba de descarga. "
+                "La salida de P-1 se convierte en la alimentación de C-02; lo mismo sucede entre P-2 y C-03."
+            )
+            read_a, read_b, read_c = st.columns(3)
+            read_a.metric("PV actual", f"{row[f'PV{i}_cm']:.2f} cm")
+            read_b.metric("Diferencia PV − SP", f"{-error:+.2f} cm")
+            read_c.metric(f"Orden P-{i}", f"{row[f'Qout{i}_lpm']:.1f} lpm")
+            st.info(
+                "Regla práctica: PV por encima de SP → se incrementa la descarga; PV por debajo de SP → se reduce. "
+                "El cambio se observa después del retardo θ de esa celda."
             )
 
         st.markdown(f"<div class='note'><b>{p.scenario}.</b> {scenario_note(p.scenario, p)}</div>", unsafe_allow_html=True)
