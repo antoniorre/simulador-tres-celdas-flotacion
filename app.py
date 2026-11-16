@@ -40,6 +40,36 @@ st.markdown(
               padding: .8rem 1rem; margin: .7rem 0; }
       div[data-testid="stMetric"] { background: white; border: 1px solid #dce5ef;
               border-radius: 12px; padding: .65rem .8rem; }
+      .section-card { background: white; border: 1px solid #dce5ef; border-radius: 16px;
+              padding: 1rem 1.1rem; box-shadow: 0 6px 16px rgba(20, 47, 76, .05); }
+      .section-kicker { font-size: .72rem; font-weight: 700; letter-spacing: .1em;
+              color:#157b87; text-transform:uppercase; }
+      .plant-shell { background:linear-gradient(140deg,#0b2036,#123b4d); border-radius:16px;
+              padding:18px 16px 14px; color:#edf8ff; overflow-x:auto; }
+      .plant-topline { display:flex; justify-content:space-between; gap:12px; font-size:.76rem;
+              color:#b7d7e5; margin-bottom:12px; }
+      .plant-flow { color:#7fe1e6; font-weight:700; }
+      .plant-row { display:flex; align-items:flex-end; gap:8px; min-width:620px; }
+      .tank-wrap { width:31%; min-width:155px; }
+      .tank-name { display:flex; justify-content:space-between; font-size:.78rem; margin:0 5px 6px; }
+      .tank-tag { color:#a9d7e5; font-size:.64rem; text-transform:uppercase; letter-spacing:.06em; }
+      .tank { position:relative; height:200px; border:2px solid #89bdcf; border-top-color:#d2edf5;
+              border-radius:7px 7px 14px 14px; overflow:hidden; background:linear-gradient(#26495d,#153044); }
+      .tank:before { content:''; position:absolute; z-index:3; left:-2px; right:-2px; top:25%; border-top:1px dashed rgba(213,244,250,.35); }
+      .liquid { position:absolute; bottom:0; left:0; right:0; background:linear-gradient(180deg,#30c7dd,#057aa8);
+              box-shadow:inset 0 8px 10px rgba(255,255,255,.20); transition:height .35s ease; }
+      .liquid:after { content:''; position:absolute; left:0; right:0; top:0; border-top:3px solid #9df5ff; }
+      .sp-line { position:absolute; z-index:4; left:4px; right:4px; border-top:2px dashed #ffbe57; }
+      .level-readout { position:absolute; z-index:5; right:7px; top:7px; font-size:.76rem; font-weight:700;
+              background:#f5ffff; color:#123246; border-radius:5px; padding:3px 5px; }
+      .sensor { position:absolute; z-index:5; left:7px; top:7px; font-size:.60rem; letter-spacing:.04em; color:#eaffff; }
+      .tank-foot { margin-top:7px; font-size:.69rem; color:#b8d9e7; display:flex; justify-content:space-between; }
+      .connector { width:4%; align-self:center; padding-bottom:54px; color:#70dae2; font-size:1.25rem; text-align:center; }
+      .monitor-card { background:#0e2945; color:white; border-radius:14px; padding:1rem; min-height:280px; }
+      .monitor-card .sub { color:#a9ccdc; font-size:.79rem; }
+      .signal { display:flex; align-items:center; justify-content:space-between; border-top:1px solid rgba(186,224,239,.20);
+               padding:.56rem 0; font-size:.83rem; }
+      .signal b { color:#71e5e6; font-size:.94rem; }
       .formula { background: #0f1e35; color: #e5efff; padding: 1rem; border-radius: 9px;
                   font-family: Consolas, monospace; white-space: pre-wrap; }
       code { color: #0a7188; }
@@ -60,11 +90,12 @@ FEED_SLOPE = 0.0035  # lpm / bit, dato de calibración de alimentación
 @dataclass(frozen=True)
 class Parameters:
     duration: int
+    scenario: str
     base_feed: float
     step_flow: float
-    step_start: int
-    step_end: int
+    event_time: int
     setpoints: tuple[float, float, float]
+    setpoints_after: tuple[float, float, float]
     initial_levels: tuple[float, float, float]
     kc: tuple[float, float, float]
     ti: tuple[float, float, float]
@@ -76,13 +107,14 @@ class Parameters:
 def defaults() -> Parameters:
     """Parámetros finales publicados para el banco; todos son editables."""
     return Parameters(
-        duration=600,
+        duration=900,
+        scenario="Perturbación de alimentación",
         base_feed=45.0,
-        step_flow=12.0,
-        step_start=180,
-        step_end=300,
-        setpoints=(30.0, 33.0, 33.0),
-        initial_levels=(30.0, 33.0, 33.0),
+        step_flow=15.0,
+        event_time=180,
+        setpoints=(29.0, 33.0, 32.0),
+        setpoints_after=(30.0, 34.0, 33.0),
+        initial_levels=(30.0, 34.0, 33.0),
         kc=(-62.0, -76.0, -85.0),
         ti=(56.0, 30.0, 44.0),
         theta=(7, 6, 3),
@@ -114,7 +146,13 @@ def simulate(p: Parameters, feedforward: bool) -> pd.DataFrame:
     n = int(p.duration) + 1
     time = np.arange(n, dtype=float)
     feed = np.full(n, p.base_feed, dtype=float)
-    feed[(time >= p.step_start) & (time < p.step_end)] += p.step_flow
+    setpoint_schedule = np.tile(np.asarray(p.setpoints, dtype=float), (n, 1))
+    is_feed_disturbance = p.scenario in {"Perturbación de alimentación", "Consigna y perturbación"}
+    is_setpoint_change = p.scenario in {"Cambio de consigna", "Consigna y perturbación"}
+    if is_feed_disturbance:
+        feed[time >= p.event_time] += p.step_flow
+    if is_setpoint_change:
+        setpoint_schedule[time >= p.event_time] = np.asarray(p.setpoints_after, dtype=float)
 
     h = np.zeros((n, 3), dtype=float)
     y = np.zeros((n, 3), dtype=float)
@@ -142,7 +180,7 @@ def simulate(p: Parameters, feedforward: bool) -> pd.DataFrame:
         for i in range(3):
             measured = h[k - 1, i] + rng.normal(0.0, p.noise)
             y[k, i] = median_sensor(sensor_histories[i], measured)
-        err[k] = np.asarray(p.setpoints) - y[k]
+        err[k] = setpoint_schedule[k] - y[k]
 
         # PI de posición con anti-windup. Kc negativo mantiene el signo físico del proceso.
         new_commands = np.empty(3, dtype=float)
@@ -175,7 +213,7 @@ def simulate(p: Parameters, feedforward: bool) -> pd.DataFrame:
     data: dict[str, np.ndarray] = {"t_s": time, "Q_feed_lpm": feed}
     for i in range(3):
         j = i + 1
-        data[f"SP{j}_cm"] = np.full(n, p.setpoints[i])
+        data[f"SP{j}_cm"] = setpoint_schedule[:, i]
         data[f"H{j}_cm"] = h[:, i]
         data[f"PV{j}_cm"] = y[:, i]
         data[f"E{j}_cm"] = err[:, i]
@@ -265,6 +303,70 @@ def make_calibration_figure() -> go.Figure:
     return fig
 
 
+def scenario_note(scenario: str, p: Parameters) -> str:
+    notes = {
+        "Perturbación de alimentación": (
+            f"La alimentación cambia de {p.base_feed:.1f} a {p.base_feed + p.step_flow:.1f} lpm "
+            f"en t = {p.event_time} s; las consignas permanecen constantes."
+        ),
+        "Cambio de consigna": (
+            f"Las consignas cambian en t = {p.event_time} s; la alimentación se mantiene en {p.base_feed:.1f} lpm."
+        ),
+        "Consigna y perturbación": (
+            f"En t = {p.event_time} s cambian simultáneamente alimentación y consignas."
+        ),
+        "Equilibrio sin perturbaciones": "No se aplican eventos: sirve para observar el equilibrio del banco y el ruido de medición.",
+    }
+    return notes[scenario]
+
+
+def tank_card(cell: int, row: pd.Series, selected: int) -> str:
+    level = float(row[f"PV{cell}_cm"])
+    sp = float(row[f"SP{cell}_cm"])
+    fill = np.clip(level / MAX_LEVEL * 100, 0, 100)
+    sp_pos = np.clip(sp / MAX_LEVEL * 100, 0, 100)
+    active = " • EN MONITOREO" if cell == selected else ""
+    return f"""
+      <div class="tank-wrap">
+        <div class="tank-name"><b>C-{cell:02d}</b><span class="tank-tag">LIC-{cell:02d}{active}</span></div>
+        <div class="tank">
+          <span class="sensor">LT-{100 + cell}</span>
+          <span class="level-readout">{level:.1f} cm</span>
+          <div class="sp-line" style="bottom:{sp_pos:.2f}%"></div>
+          <div class="liquid" style="height:{fill:.2f}%"></div>
+        </div>
+        <div class="tank-foot"><span>SP {sp:.1f} cm</span><span>P-{cell}: {row[f'Qout{cell}_lpm']:.1f} lpm</span></div>
+      </div>
+    """
+
+
+def plant_dashboard(row: pd.Series, selected: int) -> None:
+    cards = [tank_card(i, row, selected) for i in range(1, 4)]
+    st.markdown(
+        f"""<div class="plant-shell">
+          <div class="plant-topline"><span>ALIMENTACIÓN P-4 · <b class="plant-flow">{row['Q_feed_lpm']:.1f} lpm</b></span>
+          <span>Tiempo de inspección: <b>{int(row['t_s'])} s</b></span><span>Señal SP: <span style="color:#ffcf74">— —</span></span></div>
+          <div class="plant-row">
+            {cards[0]}<div class="connector">→</div>{cards[1]}<div class="connector">→</div>{cards[2]}
+          </div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+
+def published_benchmark() -> pd.DataFrame:
+    """IAE informado en la Fig. 14 del artículo, para contraste experimental."""
+    data = pd.DataFrame({
+        "Celda": NAMES,
+        "IAE publicado: PI [cm·s]": [198, 325, 260],
+        "IAE publicado: PI + FF [cm·s]": [164, 187, 221],
+    })
+    data["Reducción publicada [%]"] = 100 * (
+        data["IAE publicado: PI [cm·s]"] - data["IAE publicado: PI + FF [cm·s]"]
+    ) / data["IAE publicado: PI [cm·s]"]
+    return data
+
+
 def p_and_id() -> None:
     st.graphviz_chart(
         """digraph bank {
@@ -287,22 +389,40 @@ def p_and_id() -> None:
 
 def parameter_form(current: Parameters) -> tuple[Parameters | None, bool]:
     with st.sidebar:
-        st.header("Configuración numérica")
-        st.caption("Cambie valores y pulse **Ejecutar simulación**. Los resultados no se dibujan como una animación.")
+        st.header("Diseño del ensayo")
+        st.caption("Configure un caso, calcule toda la trayectoria y compare las dos estrategias. No es una animación decorativa.")
         with st.form("simulation_parameters", border=False):
-            duration = st.slider("Duración del ensayo [s]", 120, 1200, current.duration, 30)
+            scenarios = [
+                "Perturbación de alimentación", "Cambio de consigna", "Consigna y perturbación", "Equilibrio sin perturbaciones"
+            ]
+            scenario = st.selectbox("Escenario", scenarios, index=scenarios.index(current.scenario))
+            duration = st.slider("Duración del ensayo [s]", 180, 1200, current.duration, 30)
+            event_enabled = scenario != "Equilibrio sin perturbaciones"
+            event_time = st.slider(
+                "Primer evento [s]", 1, duration - 1, min(current.event_time, duration - 1), disabled=not event_enabled
+            )
             base_feed = st.number_input("Caudal base de alimentación [lpm]", 5.0, 80.0, current.base_feed, 0.5)
-            step_flow = st.slider("Perturbación ΔQfeed [lpm]", -25.0, 25.0, current.step_flow, 0.5)
-            step_start = st.slider("Inicio de perturbación [s]", 0, duration - 1, min(current.step_start, duration - 1))
-            step_end = st.slider("Fin de perturbación [s]", step_start + 1, duration, min(max(current.step_end, step_start + 1), duration))
+            feed_enabled = scenario in {"Perturbación de alimentación", "Consigna y perturbación"}
+            step_flow = st.slider("Cambio de alimentación ΔQfeed [lpm]", -25.0, 25.0, current.step_flow, 0.5, disabled=not feed_enabled)
+            st.caption(scenario_note(scenario, Parameters(
+                duration, scenario, base_feed, step_flow, event_time, current.setpoints, current.setpoints_after,
+                current.initial_levels, current.kc, current.ti, current.theta, current.kff, current.noise
+            )))
             noise = st.slider("Ruido del sensor σ [cm]", 0.0, 0.15, current.noise, 0.01)
             st.divider()
-            st.subheader("Niveles [cm]")
-            sps, h0 = [], []
+            st.subheader("Niveles y consignas [cm]")
+            st.caption("SP inicial / SP después del evento / nivel inicial")
+            sps, sps_after, h0 = [], [], []
+            sp_change_enabled = scenario in {"Cambio de consigna", "Consigna y perturbación"}
             for i in range(3):
-                x, z = st.columns(2)
-                sps.append(x.number_input(f"SP C{i+1}", 5.0, 37.0, current.setpoints[i], 0.1, key=f"sp{i}"))
-                h0.append(z.number_input(f"Nivel inicial C{i+1}", 0.0, 39.0, current.initial_levels[i], 0.1, key=f"h0{i}"))
+                st.markdown(f"**Celda {i + 1:02d}**")
+                x, y, z = st.columns(3)
+                sps.append(x.number_input("SP inicial", 5.0, 37.0, current.setpoints[i], 0.1, key=f"sp_initial_{i}"))
+                sps_after.append(y.number_input(
+                    "SP posterior", 5.0, 37.0, current.setpoints_after[i], 0.1,
+                    key=f"sp_after_{i}", disabled=not sp_change_enabled
+                ))
+                h0.append(z.number_input("Nivel inicial", 0.0, 39.0, current.initial_levels[i], 0.1, key=f"h0_{i}"))
             st.divider()
             st.subheader("PI y feedforward")
             kcs, tis, thetas, kffs = [], [], [], []
@@ -312,13 +432,14 @@ def parameter_form(current: Parameters) -> tuple[Parameters | None, bool]:
                     tis.append(st.number_input(f"Ti{i+1} [s]", 5.0, 180.0, current.ti[i], 1.0, key=f"ti{i}"))
                     thetas.append(st.slider(f"Retardo θ{i+1} [s]", 0, 20, int(current.theta[i]), key=f"theta{i}"))
                     kffs.append(st.slider(f"Kff{i+1}", 0.0, 1.5, current.kff[i], 0.05, key=f"kff{i}"))
-            submitted = st.form_submit_button("▶ Ejecutar simulación", type="primary", use_container_width=True)
+            submitted = st.form_submit_button("▶ Calcular ensayo completo", type="primary", use_container_width=True)
 
     if not submitted:
         return None, False
     return Parameters(
-        duration=int(duration), base_feed=float(base_feed), step_flow=float(step_flow),
-        step_start=int(step_start), step_end=int(step_end), setpoints=tuple(map(float, sps)),
+        duration=int(duration), scenario=scenario, base_feed=float(base_feed), step_flow=float(step_flow),
+        event_time=int(event_time), setpoints=tuple(map(float, sps)),
+        setpoints_after=tuple(map(float, sps_after if sp_change_enabled else sps)),
         initial_levels=tuple(map(float, h0)), kc=tuple(map(float, kcs)), ti=tuple(map(float, tis)),
         theta=tuple(map(int, thetas)), kff=tuple(map(float, kffs)), noise=float(noise),
     ), True
@@ -360,7 +481,7 @@ def main() -> None:
     )
 
     tab_res, tab_model, tab_plc, tab_cal = st.tabs([
-        "Resultados del ensayo", "Modelo matemático", "Control PLC", "Calibración de bombas"
+        "Banco y resultados", "Modelo matemático", "Control PLC", "Calibración de bombas"
     ])
 
     with tab_res:
@@ -368,7 +489,37 @@ def main() -> None:
         a.metric("IAE total · solo PI", f"{total_fb:.1f} cm·s")
         b.metric("IAE total · PI + FF", f"{total_ff:.1f} cm·s", f"{improvement:+.1f}%")
         c.metric("Muestreo", "1 s", f"{p.duration + 1} muestras")
-        d.metric("Perturbación", f"{p.step_flow:+.1f} lpm", f"t = {p.step_start}–{p.step_end} s")
+        event_label = "Sin eventos" if p.scenario == "Equilibrio sin perturbaciones" else f"t = {p.event_time} s"
+        d.metric("Escenario activo", p.scenario.replace(" de ", "\n"), event_label)
+
+        instant = st.slider(
+            "Instante de inspección del banco [s]", 0, p.duration, min(p.duration, p.event_time + 60), key="instant"
+        )
+        row = ff.iloc[instant]
+        bank, monitor = st.columns([1.7, 0.8], gap="large")
+        with bank:
+            st.markdown("<div class='section-kicker'>Banco conectado · variables calculadas</div>", unsafe_allow_html=True)
+            st.subheader("Banco de flotación en serie")
+            selected_cell = st.radio("Celda para monitorear", [1, 2, 3], horizontal=True, format_func=lambda x: f"C-{x:02d}")
+            plant_dashboard(row, selected_cell)
+            st.caption("Nivel azul: PV filtrado. Línea amarilla: consigna. La descarga de cada celda alimenta a la siguiente.")
+        with monitor:
+            i = selected_cell
+            error = row[f"SP{i}_cm"] - row[f"PV{i}_cm"]
+            status = "EN BANDA" if abs(error) <= 0.25 else "CORRIGIENDO"
+            st.markdown(
+                f"""<div class="monitor-card"><div class="section-kicker" style="color:#7fe1e6">Monitor de instrumentación</div>
+                <h3 style="margin:.25rem 0 .2rem">Celda C-{i:02d}</h3><div class="sub">Lecturas del segundo {instant} · {status}</div>
+                <div class="signal"><span>LT-{100 + i} · PV</span><b>{row[f'PV{i}_cm']:.2f} cm</b></div>
+                <div class="signal"><span>LIC-{i:02d} · SP</span><b>{row[f'SP{i}_cm']:.2f} cm</b></div>
+                <div class="signal"><span>Error e(t)</span><b>{error:+.2f} cm</b></div>
+                <div class="signal"><span>AI · Qin</span><b>{row[f'Qin{i}_lpm']:.2f} lpm</b></div>
+                <div class="signal"><span>AO · P-{i}</span><b>{row[f'AO_P{i}_bits']:.0f} bits</b></div>
+                <div class="signal"><span>Q colas</span><b>{row[f'Qout{i}_lpm']:.2f} lpm</b></div></div>""",
+                unsafe_allow_html=True,
+            )
+
+        st.markdown(f"<div class='note'><b>{p.scenario}.</b> {scenario_note(p.scenario, p)}</div>", unsafe_allow_html=True)
 
         st.subheader("Nivel de pulpa: comparación de estrategias")
         st.plotly_chart(make_level_figure(feedback, ff), width="stretch")
@@ -388,13 +539,10 @@ def main() -> None:
             "IAE solo PI [cm·s]": "{:.2f}", "IAE PI + FF [cm·s]": "{:.2f}", "Mejora IAE [%]": "{:+.1f}%"
         }), width="stretch", hide_index=True)
 
-        st.subheader("Punto de inspección")
-        instant = st.slider("Segundo que desea inspeccionar", 0, p.duration, min(p.duration, 300), key="instant")
-        row = ff.iloc[instant]
-        cols = st.columns(3)
-        for i, col in enumerate(cols, 1):
-            col.metric(f"C-{i} — Nivel medido", f"{row[f'PV{i}_cm']:.2f} cm", f"SP = {row[f'SP{i}_cm']:.1f} cm")
-            col.caption(f"Q entrada = {row[f'Qin{i}_lpm']:.2f} lpm · P-{i} = {row[f'Qout{i}_lpm']:.2f} lpm · AO = {row[f'AO_P{i}_bits']:.0f} bits")
+        st.subheader("Referencia experimental del artículo")
+        st.caption("El cuadro contrasta los IAE publicados para el banco físico; no sustituye la simulación calculada arriba.")
+        benchmark = published_benchmark()
+        st.dataframe(benchmark.style.format({"Reducción publicada [%]": "{:+.1f}%"}), width="stretch", hide_index=True)
 
         csv = ff.to_csv(index=False).encode("utf-8")
         st.download_button("Descargar resultados PI + FF en CSV", csv, "resultados_tres_celdas.csv", "text/csv")
