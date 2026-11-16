@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from plotly.subplots import make_subplots
 
 
@@ -320,38 +321,105 @@ def scenario_note(scenario: str, p: Parameters) -> str:
     return notes[scenario]
 
 
-def tank_card(cell: int, row: pd.Series, selected: int) -> str:
-    level = float(row[f"PV{cell}_cm"])
-    sp = float(row[f"SP{cell}_cm"])
-    fill = np.clip(level / MAX_LEVEL * 100, 0, 100)
-    sp_pos = np.clip(sp / MAX_LEVEL * 100, 0, 100)
-    active = " • EN MONITOREO" if cell == selected else ""
-    return f"""
-      <div class="tank-wrap">
-        <div class="tank-name"><b>C-{cell:02d}</b><span class="tank-tag">LIC-{cell:02d}{active}</span></div>
-        <div class="tank">
-          <span class="sensor">LT-{100 + cell}</span>
-          <span class="level-readout">{level:.1f} cm</span>
-          <div class="sp-line" style="bottom:{sp_pos:.2f}%"></div>
-          <div class="liquid" style="height:{fill:.2f}%"></div>
-        </div>
-        <div class="tank-foot"><span>SP {sp:.1f} cm</span><span>P-{cell}: {row[f'Qout{cell}_lpm']:.1f} lpm</span></div>
-      </div>
+def plant_dashboard(row: pd.Series, selected: int, strategy: str, scale: str) -> None:
+    """Dibuja el banco como una planta SVG, no como una animación ni texto HTML.
+
+    El SVG se entrega dentro de un componente de Streamlit para que el navegador
+    interprete todos los elementos del P&ID (tuberías, bombas y tanques).
     """
 
+    tank_x = [245, 550, 855]
+    tank_w, tank_top, tank_bottom = 160, 135, 360
+    tank_height = tank_bottom - tank_top
 
-def plant_dashboard(row: pd.Series, selected: int) -> None:
-    cards = [tank_card(i, row, selected) for i in range(1, 4)]
-    st.markdown(
-        f"""<div class="plant-shell">
-          <div class="plant-topline"><span>ALIMENTACIÓN P-4 · <b class="plant-flow">{row['Q_feed_lpm']:.1f} lpm</b></span>
-          <span>Tiempo de inspección: <b>{int(row['t_s'])} s</b></span><span>Señal SP: <span style="color:#ffcf74">— —</span></span></div>
-          <div class="plant-row">
-            {cards[0]}<div class="connector">→</div>{cards[1]}<div class="connector">→</div>{cards[2]}
-          </div>
-        </div>""",
-        unsafe_allow_html=True,
-    )
+    def tank_svg(cell: int, x: int) -> str:
+        level = float(row[f"PV{cell}_cm"])
+        sp = float(row[f"SP{cell}_cm"])
+        qout = float(row[f"Qout{cell}_lpm"])
+        if scale == "Nivel ampliado (±3 cm alrededor de SP)":
+            fill_fraction = np.clip((level - (sp - 3.0)) / 6.0, 0.0, 1.0)
+            sp_fraction = 0.5
+            scale_label = "SP ±3 cm"
+        else:
+            fill_fraction = np.clip(level / MAX_LEVEL, 0.0, 1.0)
+            sp_fraction = np.clip(sp / MAX_LEVEL, 0.0, 1.0)
+            scale_label = "0–39 cm"
+
+        water_y = tank_bottom - fill_fraction * tank_height
+        sp_y = tank_bottom - sp_fraction * tank_height
+        active = " • MONITOREO" if cell == selected else ""
+        return f"""
+          <g>
+            <rect x="{x + 18}" y="72" width="124" height="27" rx="7" class="cell-label"/>
+            <circle cx="{x + 33}" cy="85.5" r="4.2" class="ok-dot"/>
+            <text x="{x + 47}" y="90" class="cell-title">CELDA {cell:02d}{active}</text>
+            <rect x="{x + 50}" y="104" width="60" height="32" rx="5" class="lt-display"/>
+            <text x="{x + 80}" y="118" text-anchor="middle" class="lt-small">LT-{100 + cell}</text>
+            <text x="{x + 80}" y="130" text-anchor="middle" class="lt-value">{level:.1f}</text>
+            <path d="M {x} {tank_top} L {x + 18} {tank_top - 16} L {x + tank_w - 18} {tank_top - 16} L {x + tank_w} {tank_top} Z" class="tank-roof"/>
+            <rect x="{x}" y="{tank_top}" width="{tank_w}" height="{tank_height}" rx="3" class="tank-body"/>
+            <rect x="{x + 7}" y="{water_y:.1f}" width="{tank_w - 14}" height="{tank_bottom - water_y:.1f}" class="water"/>
+            <line x1="{x + 7}" x2="{x + tank_w - 7}" y1="{sp_y:.1f}" y2="{sp_y:.1f}" class="sp-line-svg"/>
+            <text x="{x + 10}" y="{sp_y - 5:.1f}" class="sp-text">SP {sp:.1f}</text>
+            <line x1="{x + 14}" x2="{x + 22}" y1="{tank_top + 42}" y2="{tank_top + 42}" class="scale-mark"/>
+            <line x1="{x + 14}" x2="{x + 22}" y1="{tank_top + 98}" y2="{tank_top + 98}" class="scale-mark"/>
+            <line x1="{x + 14}" x2="{x + 22}" y1="{tank_top + 154}" y2="{tank_top + 154}" class="scale-mark"/>
+            <path d="M {x + tank_w - 20} {tank_top + 18} v150" class="ladder"/>
+            <path d="M {x + tank_w - 38} {tank_top + 18} v150" class="ladder"/>
+            <path d="M {x + tank_w - 38} {tank_top + 43} h18 M {x + tank_w - 38} {tank_top + 68} h18 M {x + tank_w - 38} {tank_top + 93} h18 M {x + tank_w - 38} {tank_top + 118} h18 M {x + tank_w - 38} {tank_top + 143} h18" class="ladder"/>
+            <line x1="{x + 16}" x2="{x + 16}" y1="{tank_bottom}" y2="382" class="leg"/>
+            <line x1="{x + tank_w - 16}" x2="{x + tank_w - 16}" y1="{tank_bottom}" y2="382" class="leg"/>
+            <text x="{x + 80}" y="405" text-anchor="middle" class="value-title">PV {level:.2f} cm · SP {sp:.2f} cm</text>
+            <text x="{x + 80}" y="422" text-anchor="middle" class="value-sub">P-{cell}: {qout:.1f} lpm · {scale_label}</text>
+          </g>"""
+
+    tank_shapes = "".join(tank_svg(cell, x) for cell, x in enumerate(tank_x, start=1))
+    qfeed = float(row["Q_feed_lpm"])
+    q1, q2, q3 = [float(row[f"Qout{i}_lpm"]) for i in range(1, 4)]
+    selected_name = f"C-{selected:02d}"
+    html = f"""
+    <!DOCTYPE html><html><head><style>
+      * {{ box-sizing:border-box; }} body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:#fff; color:#15324b; }}
+      .plant-card {{ border:1px solid #d7e7e9; border-radius:16px; padding:16px 18px 10px; background:linear-gradient(180deg,#ffffff,#f7fcfc); }}
+      .top {{ display:flex; flex-wrap:wrap; justify-content:space-between; gap:10px; align-items:center; margin-bottom:10px; }}
+      h2 {{ margin:0; font-size:20px; color:#0d3047; }} .sub {{ margin-top:4px; font-size:12px; color:#607e8e; }}
+      .badge {{ border:1px solid #bad9dc; padding:7px 10px; border-radius:8px; color:#076d7d; font-size:12px; font-weight:700; background:#effafa; }}
+      svg {{ width:100%; min-width:760px; height:auto; display:block; }}
+      .grid {{ fill:url(#grid); }} .pipe {{ fill:none; stroke:#86aeb9; stroke-width:7; stroke-linecap:round; }} .pipe-flow {{ fill:none; stroke:#149bb0; stroke-width:2.5; stroke-dasharray:9 7; stroke-linecap:round; }}
+      .flow-label {{ font-size:13px; font-weight:700; fill:#127a91; }} .equip-label {{ font-size:10px; fill:#4d7281; letter-spacing:1px; }}
+      .tank-body {{ fill:#e6f1f3; stroke:#8eaeba; stroke-width:2; }} .tank-roof {{ fill:#f1f7f8; stroke:#8eaeba; stroke-width:2; }} .water {{ fill:url(#water); opacity:.93; }}
+      .sp-line-svg {{ stroke:#f2b640; stroke-width:2.5; stroke-dasharray:6 5; }} .sp-text {{ font-size:10px; fill:#86651e; }} .scale-mark {{ stroke:#8caab6; stroke-width:1; }}
+      .ladder {{ fill:none; stroke:#e5b631; stroke-width:3; }} .leg {{ stroke:#91aeb6; stroke-width:5; }} .cell-label {{ fill:#edf7f8; stroke:#c8dfe3; }} .ok-dot {{ fill:#35ac8a; }}
+      .cell-title {{ font-size:11px; fill:#48717e; letter-spacing:1px; }} .lt-display {{ fill:#168faa; stroke:#0a6680; stroke-width:2; }} .lt-small {{ font-size:8px; fill:#d9fcff; }} .lt-value {{ font-size:13px; fill:white; font-weight:700; }}
+      .pump {{ fill:#128ca5; stroke:#0b6880; stroke-width:2; }} .pump-plus {{ font-size:24px; fill:white; font-weight:300; }} .pump-foot {{ fill:#89b8c1; }} .plc {{ fill:#0c3853; stroke:#76cbd1; stroke-width:1.5; }} .plc-text {{ font-size:11px; fill:#def9fb; font-weight:700; letter-spacing:.5px; }} .control {{ stroke:#6caeb8; stroke-width:1.5; stroke-dasharray:5 5; fill:none; }}
+      .value-title {{ font-size:13px; font-weight:700; fill:#113d54; }} .value-sub {{ font-size:11px; fill:#557783; }} .legend {{ display:flex; flex-wrap:wrap; gap:15px; padding:3px 0 7px; font-size:11px; color:#456a78; }} .dot {{ display:inline-block; width:9px; height:9px; border-radius:50%; background:#1da6de; margin-right:5px; }} .dash {{ display:inline-block; width:18px; border-top:2px dashed #f2b640; margin:0 5px 3px 0; }}
+      .footer {{ border-top:1px solid #dcebed; padding-top:9px; font-size:11px; color:#617e88; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; }}
+    </style></head><body>
+      <div class="plant-card">
+        <div class="top"><div><h2>Banco de flotación</h2><div class="sub">La salida de una celda alimenta la siguiente. Lectura calculada para {strategy}.</div></div><div class="badge">PLC-01 · ciclo de control 1 s</div></div>
+        <div class="legend"><span><i class="dot"></i>Nivel simulado (PV)</span><span><i class="dash"></i>Consigna (SP)</span><span>━━ Flujo de pulpa</span><span>┄┄ Señal de control PLC</span></div>
+        <svg viewBox="0 0 1210 445" role="img" aria-label="Diagrama del banco de tres celdas con caudales y niveles calculados">
+          <defs><pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><path d="M 28 0 L 0 0 0 28" fill="none" stroke="#e8f2f3" stroke-width="1"/></pattern><linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#47c6ee"/><stop offset="1" stop-color="#168ec7"/></linearGradient><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#149bb0"/></marker></defs>
+          <rect class="grid" x="0" y="0" width="1210" height="445" rx="9"/>
+          <rect x="530" y="12" width="150" height="37" rx="7" class="plc"/><text x="605" y="28" text-anchor="middle" class="plc-text">PLC-01</text><text x="605" y="41" text-anchor="middle" class="lt-small">LIC-1 · LIC-2 · LIC-3</text>
+          <path d="M 605 49 V 63 H 325 M 605 63 H 630 M 605 63 H 935" class="control"/><path d="M 325 63 V 104 M 630 63 V 104 M 935 63 V 104" class="control"/>
+          <rect x="28" y="285" width="126" height="78" rx="7" fill="#d7e9ed" stroke="#91b5bd" stroke-width="2"/><text x="91" y="309" text-anchor="middle" class="equip-label">T-1 · RESERVORIO</text><text x="91" y="336" text-anchor="middle" class="cell-title">ALIMENTACIÓN</text>
+          <path d="M 154 324 H 184" class="pipe"/><path d="M 154 324 H 184" class="pipe-flow" marker-end="url(#arrow)"/>
+          <circle cx="204" cy="324" r="20" class="pump"/><text x="204" y="332" text-anchor="middle" class="pump-plus">+</text><text x="204" y="361" text-anchor="middle" class="equip-label">P-4</text>
+          <path d="M 224 324 H 245" class="pipe"/><path d="M 224 324 H 245" class="pipe-flow" marker-end="url(#arrow)"/><text x="154" y="268" class="flow-label">Qfeed {qfeed:.1f} lpm</text>
+          {tank_shapes}
+          <path d="M405 329 H 425 M 465 329 H550 M710 329 H730 M770 329 H855 M1015 329 H1035 M1075 329 H1125 V385 H91 V363" class="pipe"/>
+          <path d="M405 329 H 425 M465 329 H550 M710 329 H730 M770 329 H855 M1015 329 H1035 M1075 329 H1125 V385 H91 V363" class="pipe-flow" marker-end="url(#arrow)"/>
+          <circle cx="445" cy="329" r="20" class="pump"/><text x="445" y="337" text-anchor="middle" class="pump-plus">+</text><text x="445" y="361" text-anchor="middle" class="equip-label">P-1</text>
+          <circle cx="750" cy="329" r="20" class="pump"/><text x="750" y="337" text-anchor="middle" class="pump-plus">+</text><text x="750" y="361" text-anchor="middle" class="equip-label">P-2</text>
+          <circle cx="1055" cy="329" r="20" class="pump"/><text x="1055" y="337" text-anchor="middle" class="pump-plus">+</text><text x="1055" y="361" text-anchor="middle" class="equip-label">P-3</text>
+          <text x="478" y="310" class="flow-label">{q1:.1f} lpm</text><text x="783" y="310" class="flow-label">{q2:.1f} lpm</text><text x="1088" y="310" class="flow-label">{q3:.1f} lpm</text>
+          <text x="570" y="397" class="equip-label">RETORNO A T-1 · DEPÓSITO NO DINÁMICO EN ESTE MODELO</text>
+        </svg>
+        <div class="footer"><span><b>Celda observada:</b> {selected_name}. El recuadro superior LT mide PV; la línea amarilla marca SP.</span><span><b>Interpretación:</b> si PV está sobre SP, el PLC ordena más descarga.</span></div>
+      </div>
+    </body></html>"""
+    components.html(html, height=525, scrolling=False)
 
 
 def published_benchmark() -> pd.DataFrame:
@@ -391,24 +459,56 @@ def parameter_form(current: Parameters) -> tuple[Parameters | None, bool]:
     with st.sidebar:
         st.header("Diseño del ensayo")
         st.caption("Configure un caso, calcule toda la trayectoria y compare las dos estrategias. No es una animación decorativa.")
+        with st.expander("📘 Guía rápida: ¿qué parámetro debo cambiar?"):
+            st.markdown(
+                """**Para crear una perturbación:** cambie **ΔQfeed**. Representa que entra más o menos pulpa a C-01.
+
+**Para pedir otro nivel:** cambie **SP inicial** o **SP posterior**. Es el nivel objetivo del controlador.
+
+**Kc:** define qué tan fuerte reacciona la bomba ante un error. En este banco es negativo porque abrir la descarga baja el nivel.
+
+**Ti:** define cuánto corrige el error acumulado. Un Ti menor elimina antes el error, pero puede volver la respuesta oscilatoria.
+
+**θ (retardo):** tiempo que tarda una orden de bomba en afectar el nivel medido.
+
+**Kff:** anticipa el efecto de una perturbación medida; déjelo en 0 para observar solo PI.
+
+**Ruido del sensor:** imita incertidumbre de LT-101/LT-102/LT-103 sin cambiar la dinámica física."""
+            )
         with st.form("simulation_parameters", border=False):
             scenarios = [
                 "Perturbación de alimentación", "Cambio de consigna", "Consigna y perturbación", "Equilibrio sin perturbaciones"
             ]
-            scenario = st.selectbox("Escenario", scenarios, index=scenarios.index(current.scenario))
-            duration = st.slider("Duración del ensayo [s]", 180, 1200, current.duration, 30)
+            scenario = st.selectbox(
+                "Escenario", scenarios, index=scenarios.index(current.scenario),
+                help="Seleccione qué evento ocurrirá durante el ensayo numérico."
+            )
+            duration = st.slider(
+                "Duración del ensayo [s]", 180, 1200, current.duration, 30,
+                help="Tiempo total que se integra el modelo. Cada punto de las gráficas equivale a un segundo."
+            )
             event_enabled = scenario != "Equilibrio sin perturbaciones"
             event_time = st.slider(
-                "Primer evento [s]", 1, duration - 1, min(current.event_time, duration - 1), disabled=not event_enabled
+                "Primer evento [s]", 1, duration - 1, min(current.event_time, duration - 1), disabled=not event_enabled,
+                help="Segundo en que se aplica el cambio de alimentación o de consigna."
             )
-            base_feed = st.number_input("Caudal base de alimentación [lpm]", 5.0, 80.0, current.base_feed, 0.5)
+            base_feed = st.number_input(
+                "Caudal base de alimentación [lpm]", 5.0, 80.0, current.base_feed, 0.5,
+                help="Caudal nominal de pulpa que entra al banco por la bomba P-4."
+            )
             feed_enabled = scenario in {"Perturbación de alimentación", "Consigna y perturbación"}
-            step_flow = st.slider("Cambio de alimentación ΔQfeed [lpm]", -25.0, 25.0, current.step_flow, 0.5, disabled=not feed_enabled)
+            step_flow = st.slider(
+                "Cambio de alimentación ΔQfeed [lpm]", -25.0, 25.0, current.step_flow, 0.5, disabled=not feed_enabled,
+                help="Perturbación aplicada a P-4. Un valor positivo aumenta la entrada de pulpa."
+            )
             st.caption(scenario_note(scenario, Parameters(
                 duration, scenario, base_feed, step_flow, event_time, current.setpoints, current.setpoints_after,
                 current.initial_levels, current.kc, current.ti, current.theta, current.kff, current.noise
             )))
-            noise = st.slider("Ruido del sensor σ [cm]", 0.0, 0.15, current.noise, 0.01)
+            noise = st.slider(
+                "Ruido del sensor σ [cm]", 0.0, 0.15, current.noise, 0.01,
+                help="Variación aleatoria que se añade a los sensores de nivel antes del filtro de mediana."
+            )
             st.divider()
             st.subheader("Niveles y consignas [cm]")
             st.caption("SP inicial / SP después del evento / nivel inicial")
@@ -417,21 +517,40 @@ def parameter_form(current: Parameters) -> tuple[Parameters | None, bool]:
             for i in range(3):
                 st.markdown(f"**Celda {i + 1:02d}**")
                 x, y, z = st.columns(3)
-                sps.append(x.number_input("SP inicial", 5.0, 37.0, current.setpoints[i], 0.1, key=f"sp_initial_{i}"))
+                sps.append(x.number_input(
+                    "SP inicial", 5.0, 37.0, current.setpoints[i], 0.1, key=f"sp_initial_{i}",
+                    help="Nivel objetivo antes del evento."
+                ))
                 sps_after.append(y.number_input(
                     "SP posterior", 5.0, 37.0, current.setpoints_after[i], 0.1,
-                    key=f"sp_after_{i}", disabled=not sp_change_enabled
+                    key=f"sp_after_{i}", disabled=not sp_change_enabled,
+                    help="Nuevo nivel objetivo después del evento; se habilita en escenarios con cambio de consigna."
                 ))
-                h0.append(z.number_input("Nivel inicial", 0.0, 39.0, current.initial_levels[i], 0.1, key=f"h0_{i}"))
+                h0.append(z.number_input(
+                    "Nivel inicial", 0.0, 39.0, current.initial_levels[i], 0.1, key=f"h0_{i}",
+                    help="Nivel con el que inicia la integración de la celda."
+                ))
             st.divider()
             st.subheader("PI y feedforward")
             kcs, tis, thetas, kffs = [], [], [], []
             for i in range(3):
                 with st.expander(f"Parámetros de celda {i+1}", expanded=(i == 0)):
-                    kcs.append(st.number_input(f"Kc{i+1} [lpm/cm]", -150.0, -1.0, current.kc[i], 1.0, key=f"kc{i}"))
-                    tis.append(st.number_input(f"Ti{i+1} [s]", 5.0, 180.0, current.ti[i], 1.0, key=f"ti{i}"))
-                    thetas.append(st.slider(f"Retardo θ{i+1} [s]", 0, 20, int(current.theta[i]), key=f"theta{i}"))
-                    kffs.append(st.slider(f"Kff{i+1}", 0.0, 1.5, current.kff[i], 0.05, key=f"kff{i}"))
+                    kcs.append(st.number_input(
+                        f"Kc{i+1} [lpm/cm]", -150.0, -1.0, current.kc[i], 1.0, key=f"kc{i}",
+                        help="Ganancia proporcional. Mayor magnitud = corrección de bomba más agresiva."
+                    ))
+                    tis.append(st.number_input(
+                        f"Ti{i+1} [s]", 5.0, 180.0, current.ti[i], 1.0, key=f"ti{i}",
+                        help="Tiempo integral. Menor valor = el error persistente se corrige más rápido."
+                    ))
+                    thetas.append(st.slider(
+                        f"Retardo θ{i+1} [s]", 0, 20, int(current.theta[i]), key=f"theta{i}",
+                        help="Retraso de transporte entre la orden de bomba y la respuesta medida."
+                    ))
+                    kffs.append(st.slider(
+                        f"Kff{i+1}", 0.0, 1.5, current.kff[i], 0.05, key=f"kff{i}",
+                        help="Ganancia de compensación anticipada. Use 0 para desactivarla."
+                    ))
             submitted = st.form_submit_button("▶ Calcular ensayo completo", type="primary", use_container_width=True)
 
     if not submitted:
@@ -492,24 +611,39 @@ def main() -> None:
         event_label = "Sin eventos" if p.scenario == "Equilibrio sin perturbaciones" else f"t = {p.event_time} s"
         d.metric("Escenario activo", p.scenario.replace(" de ", "\n"), event_label)
 
+        view_a, view_b = st.columns([1, 1.25])
+        with view_a:
+            strategy = st.selectbox(
+                "Estrategia mostrada en el banco",
+                ["PI + feedforward", "Solo PI"],
+                help="Cambia las lecturas del diagrama y del monitor. Las dos curvas se conservan en la gráfica comparativa."
+            )
+        with view_b:
+            scale = st.selectbox(
+                "Escala visual del nivel",
+                ["Nivel real (0–39 cm)", "Nivel ampliado (±3 cm alrededor de SP)"],
+                help="La escala ampliada hace visible una desviación pequeña; las cifras PV y SP siempre son los valores reales."
+            )
+
         instant = st.slider(
             "Instante de inspección del banco [s]", 0, p.duration, min(p.duration, p.event_time + 60), key="instant"
         )
-        row = ff.iloc[instant]
+        display_df = ff if strategy == "PI + feedforward" else feedback
+        row = display_df.iloc[instant]
         bank, monitor = st.columns([1.7, 0.8], gap="large")
         with bank:
             st.markdown("<div class='section-kicker'>Banco conectado · variables calculadas</div>", unsafe_allow_html=True)
             st.subheader("Banco de flotación en serie")
             selected_cell = st.radio("Celda para monitorear", [1, 2, 3], horizontal=True, format_func=lambda x: f"C-{x:02d}")
-            plant_dashboard(row, selected_cell)
-            st.caption("Nivel azul: PV filtrado. Línea amarilla: consigna. La descarga de cada celda alimenta a la siguiente.")
+            plant_dashboard(row, selected_cell, strategy, scale)
+            st.caption("Nivel azul: PV filtrado. Línea amarilla: consigna. Cada bomba descarga la celda anterior y alimenta la siguiente.")
         with monitor:
             i = selected_cell
             error = row[f"SP{i}_cm"] - row[f"PV{i}_cm"]
             status = "EN BANDA" if abs(error) <= 0.25 else "CORRIGIENDO"
             st.markdown(
                 f"""<div class="monitor-card"><div class="section-kicker" style="color:#7fe1e6">Monitor de instrumentación</div>
-                <h3 style="margin:.25rem 0 .2rem">Celda C-{i:02d}</h3><div class="sub">Lecturas del segundo {instant} · {status}</div>
+                <h3 style="margin:.25rem 0 .2rem">Celda C-{i:02d}</h3><div class="sub">{strategy} · segundo {instant} · {status}</div>
                 <div class="signal"><span>LT-{100 + i} · PV</span><b>{row[f'PV{i}_cm']:.2f} cm</b></div>
                 <div class="signal"><span>LIC-{i:02d} · SP</span><b>{row[f'SP{i}_cm']:.2f} cm</b></div>
                 <div class="signal"><span>Error e(t)</span><b>{error:+.2f} cm</b></div>
